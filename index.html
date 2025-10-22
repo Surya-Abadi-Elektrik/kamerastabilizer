@@ -1,464 +1,121 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="utf-8" />
+<meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-<title>AI Real-Time Stabilizer Pro (Web)</title>
-
-<!-- OpenCV.js (wasm) -->
+<title>AI GCam Stabilizer Pro</title>
 <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
-<!-- Tailwind for UI -->
 <script src="https://cdn.tailwindcss.com"></script>
-
 <style>
-  body { background: #071025; color: #e6eef8; font-family: Inter, system-ui, sans-serif; }
-  .card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.04); }
-  .small { font-size:.85rem; color:#9fb3d5; }
-  video, canvas { border-radius: 12px; background: black; display:block; }
-  #compareRow video { max-height:160px; }
+body {background:#000;color:#fff;font-family:sans-serif;overflow:hidden;}
+video,canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
+#ui{position:fixed;bottom:0;left:0;width:100%;padding:16px;background:linear-gradient(to top,rgba(0,0,0,0.8),transparent);}
+.mode-btn{font-size:.8rem;opacity:.6;}
+.mode-btn.active{opacity:1;font-weight:600;}
 </style>
 </head>
-<body class="min-h-screen flex items-center justify-center p-4">
-  <div class="w-full max-w-5xl card rounded-2xl p-6 shadow-xl">
-    <div class="flex items-center justify-between mb-4">
-      <h1 class="text-2xl font-semibold">🧠 AI Real-Time Stabilizer Pro</h1>
-      <div class="small">Prototype — Run in Browser (Chrome/Edge recommended)</div>
-    </div>
+<body>
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <!-- Controls -->
-      <div class="col-span-1 space-y-3">
-        <div class="flex gap-2">
-          <button id="startBtn" class="px-4 py-2 bg-green-600 rounded-lg">Start Camera</button>
-          <button id="stopBtn" class="px-4 py-2 bg-red-600 rounded-lg">Stop</button>
-          <button id="swapBtn" class="px-4 py-2 bg-gray-700 rounded-lg">Swap Cam</button>
-        </div>
-
-        <div>
-          <label class="small">🎚️ Stability (sensitivity)</label>
-          <input id="stability" type="range" min="0" max="100" value="55" class="w-full">
-        </div>
-
-        <div>
-          <label class="small">🧮 Smoothing Window (frames)</label>
-          <input id="smoothing" type="range" min="1" max="60" value="10" class="w-full">
-        </div>
-
-        <div>
-          <label class="small">✂️ Crop (%)</label>
-          <input id="crop" type="range" min="0" max="20" value="6" class="w-full">
-        </div>
-
-        <div class="flex items-center gap-2">
-          <input id="aiToggle" type="checkbox" class="h-4 w-4" checked>
-          <label class="small">AI Adaptive Mode (on-device)</label>
-        </div>
-
-        <div class="flex gap-2">
-          <button id="recordBtn" class="px-4 py-2 bg-blue-600 rounded-lg">Start Recording</button>
-          <span id="recIndicator" class="small text-red-400 hidden">● REC</span>
-        </div>
-
-        <div class="small text-gray-300 mt-2">
-          <div id="status">Status: idle</div>
-          <div id="perf">Perf: —</div>
-          <div id="resolution">Resolution: —</div>
-        </div>
-
-        <div class="mt-2 small text-gray-400">
-          Tips: jika terasa lag, turunkan smoothing / stability atau pakai Swap Cam untuk mode belakang.
-        </div>
-      </div>
-
-      <!-- Preview -->
-      <div class="col-span-2 space-y-3">
-        <div class="grid grid-cols-2 gap-3">
-          <div class="text-center">
-            <div class="small mb-1">Camera (input)</div>
-            <video id="inputVideo" autoplay playsinline muted style="width:100%; max-height:420px;"></video>
-          </div>
-          <div class="text-center">
-            <div class="small mb-1">Stabilized (output)</div>
-            <canvas id="outputCanvas" style="width:100%; max-height:420px;"></canvas>
-          </div>
-        </div>
-
-        <div id="compareRow" class="flex gap-3 items-start">
-          <div class="flex-1 text-center">
-            <div class="small mb-1">Before</div>
-            <video id="beforePreview" controls style="width:100%; display:none;"></video>
-          </div>
-          <div class="flex-1 text-center">
-            <div class="small mb-1">After (last recording)</div>
-            <video id="afterPreview" controls style="width:100%; display:none;"></video>
-          </div>
-          <div class="w-48 text-center">
-            <div class="small mb-1">Download</div>
-            <a id="downloadLink" class="inline-block px-3 py-2 bg-indigo-600 rounded-lg">No recording</a>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <hr class="my-4 border-gray-700" />
-    <div class="small text-gray-400">
-      Engine: OpenCV.js optical-flow + adaptive Kalman-style smoother (on-device). Recording via MediaRecorder (WebM VP8).
-    </div>
+<div id="ui" class="flex flex-col items-center space-y-3">
+  <div class="flex justify-around w-full text-gray-400 text-sm">
+    <button class="mode-btn active" data-mode="normal">Normal</button>
+    <button class="mode-btn" data-mode="steady">Steady</button>
   </div>
+  <div class="flex justify-center items-center space-x-8">
+    <button id="swapCam" class="p-3 bg-gray-700 rounded-full">↺</button>
+    <button id="toggle" class="w-20 h-20 bg-white rounded-full border-4 border-gray-400"></button>
+    <button id="lensBtn" class="p-3 bg-gray-700 rounded-full">1x</button>
+  </div>
+  <div id="msg" class="text-xs text-gray-400"></div>
+</div>
 
 <script>
-/*
-AI Real-Time Stabilizer Pro (web) - single-file prototype
-Dependencies: OpenCV.js (loaded above)
-*/
-(async ()=>{
+let stream=null, facing='environment', lensZoom=1, mode='normal';
+let cap, running=false, rafId=null, prevGray=null, hist=[], smoother;
+const video=document.getElementById('video');
+const canvas=document.getElementById('canvas');
+const ctx=canvas.getContext('2d');
+const msg=document.getElementById('msg');
 
-// wait for OpenCV runtime to initialize
-const waitForCV = () => new Promise(resolve=>{
-  if (typeof cv !== 'undefined' && cv && cv.getBuildInformation) return resolve();
-  const id = setInterval(()=> {
-    if (typeof cv !== 'undefined' && cv && cv.getBuildInformation) { clearInterval(id); resolve(); }
-  }, 100);
-});
-await waitForCV();
-
-// DOM elements
-const startBtn = document.getElementById('startBtn');
-const stopBtn = document.getElementById('stopBtn');
-const swapBtn = document.getElementById('swapBtn');
-const inputVideo = document.getElementById('inputVideo');
-const outputCanvas = document.getElementById('outputCanvas');
-const statusEl = document.getElementById('status');
-const perfEl = document.getElementById('perf');
-const resolutionEl = document.getElementById('resolution');
-const stabilityEl = document.getElementById('stability');
-const smoothingEl = document.getElementById('smoothing');
-const cropEl = document.getElementById('crop');
-const aiToggle = document.getElementById('aiToggle');
-const recordBtn = document.getElementById('recordBtn');
-const recIndicator = document.getElementById('recIndicator');
-const beforePreview = document.getElementById('beforePreview');
-const afterPreview = document.getElementById('afterPreview');
-const downloadLink = document.getElementById('downloadLink');
-
-let stream = null, cap = null, running=false, rafId=null;
-let prevGray = null;
-let hist = []; // history of motion vectors
-let facingMode = 'environment'; // use back cam by default
-let recorder=null, recordedBlobs=[];
-let recording=false;
-let lastRecordingURL = null;
-
-// Simple adaptive Kalman-like smoother (toy AI): maintains estimate state and adapts noise covariances
+// === Simple adaptive smoother (AI Kalman-like) ===
 class AdaptiveSmoother {
-  constructor() {
-    // state: [x, y, vx, vy]
-    this.x = [0,0,0,0];
-    // cov matrix P (4x4) as flat
-    this.P = numericIdentity(4).map(v=>v*1.0);
-    // process noise q, measurement noise r (will adapt)
-    this.qBase = 0.001;
-    this.rBase = 0.05;
-    this.frameCount = 0;
-  }
-  update(measX, measY) {
-    // Predict: simple constant velocity
-    this.x[0] += this.x[2];
-    this.x[1] += this.x[3];
-    // increase uncertainty
-    for (let i=0;i<4;i++) this.P[i][i]+=this.qBase;
-
-    // measurement
-    const z = [measX, measY];
-    // measurement matrix H (2x4)
-    const H = [[1,0,0,0],[0,1,0,0]];
-    // Compute S = H*P*H^T + R
-    // R adapt based on recent motion variance
-    const var = Math.min(1.0, Math.max(0.001, Math.abs(measX)+Math.abs(measY)));
-    const R = [[this.rBase* (1+var*2),0],[0,this.rBase*(1+var*2)]];
-
-    // compute K = P*H^T * inv(S)
-    // For simplicity (small dims), compute directly
-    const P = this.P;
-    const PHt = [
-      [P[0][0], P[1][0], P[2][0], P[3][0]],
-      [P[0][1], P[1][1], P[2][1], P[3][1]]
-    ]; // but dims messy; to avoid implementing full matrix algebra robustly here, do simpler exponential smoothing fallback
-    // fallback simple exponential smoothing on position:
-    const alpha = 0.2 + Math.min(0.6, var*0.2); // adapt alpha by motion magnitude
-    this.x[0] = this.x[0]*(1-alpha) + measX*alpha;
-    this.x[1] = this.x[1]*(1-alpha) + measY*alpha;
-    // update velocity estimate
-    this.x[2] = (this.x[0]-measX) * 0.5;
-    this.x[3] = (this.x[1]-measY) * 0.5;
-
-    this.frameCount++;
-    // return smoothed pos
-    return {x: this.x[0], y: this.x[1]};
-  }
-}
-// small helper numeric identity  (not heavy lib)
-function numericIdentity(n){ const A=[]; for(let i=0;i<n;i++){A[i]=[]; for(let j=0;j<n;j++) A[i][j]= (i===j?1:0);} return A; }
-
-// Utility
-function setStatus(t){ statusEl.textContent = 'Status: ' + t; }
-function setPerf(t){ perfEl.textContent = 'Perf: ' + t; }
-function setResolution(t){ resolutionEl.textContent = 'Resolution: ' + t; }
-
-// auto-downscale detection for low-end devices (simple heuristic)
-function preferLowRes() {
-  const mem = navigator.deviceMemory || 0; // may be undefined
-  const ua = navigator.userAgent || '';
-  if (mem && mem <= 2) return true;
-  // simple check for older Android
-  if (/Android\s([0-9]|9|8)/i.test(ua) && (!mem || mem<=3)) return true;
-  return false;
+  constructor(){this.x=[0,0];this.last=[0,0];}
+  update(mx,my,alpha){this.x[0]=this.x[0]*(1-alpha)+mx*alpha;this.x[1]=this.x[1]*(1-alpha)+my*alpha;return{x:this.x[0],y:this.x[1]};}
 }
 
-let smoother = new AdaptiveSmoother();
+// === Start camera ===
+async function startCamera(){
+  try{
+    stream && stream.getTracks().forEach(t=>t.stop());
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:facing}},
+      audio:false
+    });
+    video.srcObject=stream;
+    await video.play();
+    cap=new cv.VideoCapture(video);
+    smoother=new AdaptiveSmoother();
+    running=true;
+    msg.textContent='📸 Kamera aktif ('+facing+')';
+    processLoop();
+  }catch(e){msg.textContent='⚠️ '+e.message;}
+}
 
-// processing loop
-async function processLoop() {
-  if (!running) return;
-  const t0 = performance.now();
+// === Processing loop ===
+async function processLoop(){
+  if(!running)return;
+  let src=new cv.Mat(video.videoHeight,video.videoWidth,cv.CV_8UC4);
+  cap.read(src);
+  let gray=new cv.Mat();
+  cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
 
-  // read
-  let src = new cv.Mat(inputVideo.videoHeight, inputVideo.videoWidth, cv.CV_8UC4);
-  try {
-    cap.read(src);
-  } catch (e) {
-    src.delete();
-    rafId = requestAnimationFrame(processLoop);
-    return;
-  }
-
-  // prepare canvas size
-  if (outputCanvas.width !== inputVideo.videoWidth || outputCanvas.height !== inputVideo.videoHeight) {
-    outputCanvas.width = inputVideo.videoWidth;
-    outputCanvas.height = inputVideo.videoHeight;
-  }
-
-  // grayscale
-  let gray = new cv.Mat();
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-
-  let outMat = new cv.Mat();
-  if (!prevGray) {
-    // init
-    prevGray = new cv.Mat();
-    gray.copyTo(prevGray);
-    src.copyTo(outMat);
+  if(!prevGray){
+    prevGray=new cv.Mat();gray.copyTo(prevGray);
+    cv.imshow('canvas',src);
   } else {
-    // compute optical flow Farneback
-    let flow = new cv.Mat();
-    try {
-      cv.calcOpticalFlowFarneback(prevGray, gray, flow, 0.5, 3, 15, 3, 5, 1.2, 0);
-    } catch (err) {
-      // fallback
-      src.copyTo(outMat);
-    }
-    if (flow && !flow.isDeleted()) {
-      // read flow.data32F as [fx0,fy0,fx1,fy1,...]
-      const f32 = flow.data32F;
-      const w = flow.cols, h = flow.rows;
-      let sx=0, sy=0, sc=0;
-      // sample grid stride to reduce cost
-      const stride = 8;
-      for (let yy=0; yy<h; yy+=stride) {
-        for (let xx=0; xx<w; xx+=stride) {
-          const idx = (yy*w + xx) * 2;
-          const vx = f32[idx] || 0;
-          const vy = f32[idx+1] || 0;
-          sx += vx; sy += vy; sc++;
-        }
-      }
-      const avgX = sc ? sx/sc : 0;
-      const avgY = sc ? sy/sc : 0;
+    let flow=new cv.Mat();
+    cv.calcOpticalFlowFarneback(prevGray,gray,flow,0.5,3,15,3,5,1.2,0);
+    const f32=flow.data32F, w=flow.cols, h=flow.rows;
+    let sx=0,sy=0,c=0,stride=8;
+    for(let y=0;y<h;y+=stride){for(let x=0;x<w;x+=stride){let i=(y*w+x)*2;sx+=f32[i];sy+=f32[i+1];c++;}}
+    let mx=sx/c, my=sy/c;
 
-      // push to history and smooth
-      hist.push({x: avgX, y: avgY});
-      const histLen = Math.max(1, Math.min(120, parseInt(smoothingEl.value)));
-      while (hist.length > histLen) hist.shift();
+    const alpha=mode==='steady'?0.05:0.15;
+    const s=smoother.update(mx,my,alpha);
+    const dx=-s.x*2, dy=-s.y*2;
 
-      // compute simple moving average as baseline
-      let mx=0,my=0;
-      for (let i=0;i<hist.length;i++){ mx+=hist[i].x; my+=hist[i].y; }
-      mx /= hist.length; my /= hist.length;
+    const M=cv.matFromArray(2,3,cv.CV_64F,[1,0,dx,0,1,dy]);
+    let out=new cv.Mat();
+    cv.warpAffine(src,out,M,src.size(),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar());
+    cv.imshow('canvas',out);
 
-      // combine baseline with AI-adaptive smoother if enabled
-      let smooth;
-      if (aiToggle.checked) {
-        smooth = smoother.update(mx, my); // returns {x,y}
-      } else {
-        // non-AI: weighted average by stability slider
-        const weight = parseFloat(stabilityEl.value)/100;
-        smooth = { x: mx * weight, y: my * weight };
-      }
-
-      // compute transform to compensate (inverse)
-      const dx = -smooth.x * 1.0;
-      const dy = -smooth.y * 1.0;
-
-      // apply affine warp
-      const M = cv.matFromArray(2,3,cv.CV_64F,[1,0,dx, 0,1,dy]);
-      cv.warpAffine(src, outMat, M, src.size(), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
-      M.delete();
-      flow.delete();
-    } else {
-      src.copyTo(outMat);
-    }
-    prevGray.delete();
-    prevGray = gray.clone();
+    M.delete();out.delete();flow.delete();prevGray.delete();prevGray=gray.clone();
   }
-
-  // auto-crop according to slider
-  const cp = parseFloat(cropEl.value) / 100;
-  const iw = outMat.cols, ih = outMat.rows;
-  let displayMat = outMat;
-  if (cp > 0.0001) {
-    const x0 = Math.round(iw*cp), y0 = Math.round(ih*cp);
-    const cw = Math.round(iw*(1-cp*2)), ch = Math.round(ih*(1-cp*2));
-    // check bounds
-    if (cw>0 && ch>0) {
-      displayMat = outMat.roi(new cv.Rect(x0,y0,cw,ch));
-    }
-  }
-
-  // convert displayMat to ImageData and paint to canvas
-  let rgba = new cv.Mat();
-  cv.cvtColor(displayMat, rgba, cv.COLOR_RGBA2RGBA); // ensure RGBA
-  const img = new ImageData(new Uint8ClampedArray(rgba.data), rgba.cols, rgba.rows);
-  const ctx = outputCanvas.getContext('2d');
-  // draw via temporary canvas for scaling performance
-  const tmp = document.createElement('canvas');
-  tmp.width = rgba.cols; tmp.height = rgba.rows;
-  tmp.getContext('2d').putImageData(img,0,0);
-  ctx.clearRect(0,0,outputCanvas.width,outputCanvas.height);
-  ctx.drawImage(tmp,0,0,outputCanvas.width,outputCanvas.height);
-
-  // cleanup
-  rgba.delete();
-  if (displayMat !== outMat) displayMat.delete();
-  outMat.delete();
-  src.delete();
-
-  const t1 = performance.now();
-  const fps = Math.round(1000/Math.max(1,(t1-t0)));
-  setPerf(`~${fps} fps | Hist:${hist.length}`);
-
-  rafId = requestAnimationFrame(processLoop);
+  src.delete();gray.delete();
+  rafId=requestAnimationFrame(processLoop);
 }
 
-// Start/Stop camera
-startBtn.onclick = async () => {
-  if (running) return;
-  setStatus('Requesting camera...');
-  // choose constraints: lower res on low-end devices
-  const preferLow = preferLowRes();
-  const constraints = {
-    audio: false,
-    video: {
-      facingMode: { ideal: facingMode },
-      width: { ideal: preferLow ? 640 : 1280 },
-      height: { ideal: preferLow ? 480 : 720 },
-      frameRate: { ideal: 30 }
-    }
-  };
-  try {
-    stream = await navigator.mediaDevices.getUserMedia(constraints);
-    inputVideo.srcObject = stream;
-    await inputVideo.play();
-    cap = new cv.VideoCapture(inputVideo);
-    running = true;
-    hist = [];
-    prevGray && prevGray.delete && prevGray.delete();
-    prevGray = null;
-    rafId = requestAnimationFrame(processLoop);
-    setStatus('Camera running');
-    setResolution(`${inputVideo.videoWidth}x${inputVideo.videoHeight}`);
-  } catch (e) {
-    console.error(e);
-    setStatus('Camera error: ' + (e.message || e.name));
-  }
+// === Controls ===
+document.getElementById('swapCam').onclick=()=>{facing=facing==='environment'?'user':'environment';startCamera();};
+document.getElementById('lensBtn').onclick=()=>{
+  lensZoom=lensZoom===1?0.5:1;
+  document.getElementById('lensBtn').textContent=lensZoom===1?'1x':'0.5x';
+  startCamera();
 };
-
-stopBtn.onclick = () => {
-  if (!running) return;
-  running = false;
-  if (rafId) cancelAnimationFrame(rafId);
-  if (stream) stream.getTracks().forEach(t=>t.stop());
-  stream = null;
-  cap = null;
-  prevGray && prevGray.delete && prevGray.delete();
-  prevGray = null;
-  setStatus('Camera stopped');
-  setPerf('Perf: —');
-  setResolution('—');
-};
-
-// Swap front/back camera (best-effort)
-swapBtn.onclick = async () => {
-  facingMode = (facingMode === 'environment') ? 'user' : 'environment';
-  if (running) { stopBtn.click(); await new Promise(r=>setTimeout(r,300)); startBtn.click(); }
-};
-
-// Recording
-function startRecordingFromCanvas(canvas) {
-  recordedBlobs = [];
-  const fps = 25;
-  const streamRec = canvas.captureStream(fps);
-  const options = { mimeType: 'video/webm;codecs=vp8' };
-  try {
-    recorder = new MediaRecorder(streamRec, options);
-  } catch (e) {
-    setStatus('Recording not supported: ' + e.message);
-    return;
-  }
-  recorder.ondataavailable = e => { if (e.data && e.data.size) recordedBlobs.push(e.data); };
-  recorder.onstop = () => {
-    const blob = new Blob(recordedBlobs, { type: 'video/webm' });
-    if (lastRecordingURL) { URL.revokeObjectURL(lastRecordingURL); lastRecordingURL=null; }
-    const url = URL.createObjectURL(blob);
-    lastRecordingURL = url;
-    downloadLink.href = url;
-    downloadLink.download = `stabilized-${Date.now()}.webm`;
-    downloadLink.textContent = 'Download recording';
-    afterPreview.src = url; afterPreview.style.display='block';
-    beforePreview.style.display='none';
-    recIndicator.classList.add('hidden');
-    recording=false;
-    setStatus('Recording saved.');
-  };
-  recorder.start();
-  recording = true;
-  recIndicator.classList.remove('hidden');
-  setStatus('Recording...');
-}
-
-recordBtn.onclick = () => {
-  if (!running) { setStatus('Start camera first.'); return; }
-  if (!recording) {
-    startRecordingFromCanvas(outputCanvas);
-    recordBtn.textContent = 'Stop Recording';
-  } else {
-    recorder && recorder.state !== 'inactive' && recorder.stop();
-    recordBtn.textContent = 'Start Recording';
-  }
-};
-
-// clean up on unload
-window.addEventListener('beforeunload', ()=> {
-  stopBtn.click();
-  recorder && recorder.state !== 'inactive' && recorder.stop();
+document.querySelectorAll('.mode-btn').forEach(btn=>{
+  btn.onclick=()=>{document.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');mode=btn.dataset.mode;msg.textContent='Mode: '+mode;};
 });
+document.getElementById('toggle').onclick=()=>{
+  if(running){running=false;cancelAnimationFrame(rafId);stream.getTracks().forEach(t=>t.stop());msg.textContent='⏸️ Kamera berhenti';}
+  else startCamera();
+};
 
-// initial status
-setStatus('Ready. Press Start Camera.');
-
-// expose some helpers for advanced tweaking in console
-window.__stabilizer = { hist, smoother };
-
-})(); // end async IIFE
+navigator.permissions && navigator.permissions.query({name:'camera'}).then(p=>{
+  if(p.state!=='granted')msg.textContent='🔒 Izinkan kamera...';
+});
 </script>
 </body>
 </html>
