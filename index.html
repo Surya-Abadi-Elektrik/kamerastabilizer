@@ -1,121 +1,463 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="id">
 <head>
-<meta charset="UTF-8" />
+<meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-<title>AI GCam Stabilizer Pro</title>
+<title>AI GCam Stabilizer Pro (Upgraded)</title>
 <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
-body {background:#000;color:#fff;font-family:sans-serif;overflow:hidden;}
-video,canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
-#ui{position:fixed;bottom:0;left:0;width:100%;padding:16px;background:linear-gradient(to top,rgba(0,0,0,0.8),transparent);}
-.mode-btn{font-size:.8rem;opacity:.6;}
-.mode-btn.active{opacity:1;font-weight:600;}
+  body { background:#000; color:#fff; font-family:Inter, system-ui, -apple-system, sans-serif; margin:0; height:100vh; overflow:hidden; }
+  #stage { position:relative; width:100%; height:100vh; }
+  video, canvas { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; border-radius:0; }
+  #ui { position:fixed; left:0; right:0; bottom:0; padding:14px; background:linear-gradient(to top, rgba(0,0,0,0.82), rgba(0,0,0,0.0)); display:flex; flex-direction:column; gap:10px; }
+  .controls { display:flex; justify-content:space-between; gap:10px; align-items:center; }
+  .mode { display:flex; gap:8px; }
+  .round { border-radius:999px; padding:10px; }
+  .big-btn { width:72px; height:72px; border-radius:999px; background:#fff; border:6px solid rgba(100,100,100,0.6); }
+  select, input[type="range"] { background:rgba(255,255,255,0.06); color:#fff; border:1px solid rgba(255,255,255,0.06); padding:6px; border-radius:8px; }
+  .small { font-size:0.8rem; color:#9fb3d5; }
+  #status { font-size:0.82rem; color:#cfe7ff; }
 </style>
 </head>
 <body>
-<video id="video" autoplay playsinline muted></video>
-<canvas id="canvas"></canvas>
+  <div id="stage">
+    <video id="inputVideo" autoplay playsinline muted></video>
+    <canvas id="outputCanvas"></canvas>
+  </div>
 
-<div id="ui" class="flex flex-col items-center space-y-3">
-  <div class="flex justify-around w-full text-gray-400 text-sm">
-    <button class="mode-btn active" data-mode="normal">Normal</button>
-    <button class="mode-btn" data-mode="steady">Steady</button>
+  <div id="ui">
+    <div class="controls">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <label class="small">Camera:</label>
+        <select id="deviceSelect"></select>
+        <button id="refreshDevices" class="round small">Refresh</button>
+        <label class="small" style="margin-left:8px">Mode:</label>
+        <div class="mode">
+          <button id="modeNormal" class="round small" data-mode="normal">Normal</button>
+          <button id="modeSteady" class="round small" data-mode="steady">Steady</button>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;">
+        <label class="small">Stability</label>
+        <input id="stability" type="range" min="0" max="100" value="55">
+        <label class="small">Crop</label>
+        <input id="crop" type="range" min="0" max="20" value="6">
+      </div>
+    </div>
+
+    <div class="controls">
+      <div style="display:flex;gap:10px;align-items:center;">
+        <button id="swapCam" class="round small">↺ Swap</button>
+        <button id="toggle" class="big-btn"></button>
+        <button id="recordBtn" class="round small">Record</button>
+      </div>
+
+      <div style="text-align:right;">
+        <div id="status">Status: ready</div>
+        <div id="perf" class="small">Perf: —</div>
+      </div>
+    </div>
   </div>
-  <div class="flex justify-center items-center space-x-8">
-    <button id="swapCam" class="p-3 bg-gray-700 rounded-full">↺</button>
-    <button id="toggle" class="w-20 h-20 bg-white rounded-full border-4 border-gray-400"></button>
-    <button id="lensBtn" class="p-3 bg-gray-700 rounded-full">1x</button>
-  </div>
-  <div id="msg" class="text-xs text-gray-400"></div>
-</div>
 
 <script>
-let stream=null, facing='environment', lensZoom=1, mode='normal';
-let cap, running=false, rafId=null, prevGray=null, hist=[], smoother;
-const video=document.getElementById('video');
-const canvas=document.getElementById('canvas');
-const ctx=canvas.getContext('2d');
-const msg=document.getElementById('msg');
+(async ()=>{
 
-// === Simple adaptive smoother (AI Kalman-like) ===
+/* ---------- Globals ---------- */
+const inputVideo = document.getElementById('inputVideo');
+const outputCanvas = document.getElementById('outputCanvas');
+const deviceSelect = document.getElementById('deviceSelect');
+const refreshBtn = document.getElementById('refreshDevices');
+const modeNormal = document.getElementById('modeNormal');
+const modeSteady = document.getElementById('modeSteady');
+const toggleBtn = document.getElementById('toggle');
+const swapBtn = document.getElementById('swapCam');
+const statusEl = document.getElementById('status');
+const perfEl = document.getElementById('perf');
+const stabilityEl = document.getElementById('stability');
+const cropEl = document.getElementById('crop');
+const recordBtn = document.getElementById('recordBtn');
+
+let stream = null;
+let running = false;
+let rafId = null;
+let cap = null;
+let prevGray = null;
+let hist = [];
+let deviceId = null;
+let usingFacing = 'environment'; // fallback
+let mode = 'normal';
+let mediaRecorder = null;
+let recBlobs = [];
+let lastRecordingURL = null;
+
+/* ---------- Wait for OpenCV ---------- */
+const waitForCV = () => new Promise(resolve=>{
+  if (typeof cv !== 'undefined' && cv && cv.getBuildInformation) return resolve();
+  const id = setInterval(()=> {
+    if (typeof cv !== 'undefined' && cv && cv.getBuildInformation) { clearInterval(id); resolve(); }
+  }, 100);
+});
+await waitForCV();
+
+/* ---------- Adaptive smoother (better than simple avg) ---------- */
 class AdaptiveSmoother {
-  constructor(){this.x=[0,0];this.last=[0,0];}
-  update(mx,my,alpha){this.x[0]=this.x[0]*(1-alpha)+mx*alpha;this.x[1]=this.x[1]*(1-alpha)+my*alpha;return{x:this.x[0],y:this.x[1]};}
-}
-
-// === Start camera ===
-async function startCamera(){
-  try{
-    stream && stream.getTracks().forEach(t=>t.stop());
-    stream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{ideal:facing}},
-      audio:false
-    });
-    video.srcObject=stream;
-    await video.play();
-    cap=new cv.VideoCapture(video);
-    smoother=new AdaptiveSmoother();
-    running=true;
-    msg.textContent='📸 Kamera aktif ('+facing+')';
-    processLoop();
-  }catch(e){msg.textContent='⚠️ '+e.message;}
-}
-
-// === Processing loop ===
-async function processLoop(){
-  if(!running)return;
-  let src=new cv.Mat(video.videoHeight,video.videoWidth,cv.CV_8UC4);
-  cap.read(src);
-  let gray=new cv.Mat();
-  cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
-
-  if(!prevGray){
-    prevGray=new cv.Mat();gray.copyTo(prevGray);
-    cv.imshow('canvas',src);
-  } else {
-    let flow=new cv.Mat();
-    cv.calcOpticalFlowFarneback(prevGray,gray,flow,0.5,3,15,3,5,1.2,0);
-    const f32=flow.data32F, w=flow.cols, h=flow.rows;
-    let sx=0,sy=0,c=0,stride=8;
-    for(let y=0;y<h;y+=stride){for(let x=0;x<w;x+=stride){let i=(y*w+x)*2;sx+=f32[i];sy+=f32[i+1];c++;}}
-    let mx=sx/c, my=sy/c;
-
-    const alpha=mode==='steady'?0.05:0.15;
-    const s=smoother.update(mx,my,alpha);
-    const dx=-s.x*2, dy=-s.y*2;
-
-    const M=cv.matFromArray(2,3,cv.CV_64F,[1,0,dx,0,1,dy]);
-    let out=new cv.Mat();
-    cv.warpAffine(src,out,M,src.size(),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar());
-    cv.imshow('canvas',out);
-
-    M.delete();out.delete();flow.delete();prevGray.delete();prevGray=gray.clone();
+  constructor(){ this.x=0; this.y=0; }
+  update(mx,my,alpha){
+    // alpha controls responsivity (small alpha = slower)
+    this.x = this.x*(1-alpha) + mx*alpha;
+    this.y = this.y*(1-alpha) + my*alpha;
+    return {x:this.x, y:this.y};
   }
-  src.delete();gray.delete();
-  rafId=requestAnimationFrame(processLoop);
+}
+const smoother = new AdaptiveSmoother();
+
+/* ---------- Utilities ---------- */
+function setStatus(t){ statusEl.textContent = 'Status: ' + t; }
+function setPerf(t){ perfEl.textContent = 'Perf: ' + t; }
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+/* ---------- Device enumeration (for UW/main pick if browser exposes devices) ---------- */
+async function listVideoDevices(){
+  deviceSelect.innerHTML = '';
+  try {
+    // Need permission to get labels (request permission if not granted)
+    // We attempt enumerate then getUserMedia if labels are empty.
+    let devices = await navigator.mediaDevices.enumerateDevices();
+    let cameras = devices.filter(d => d.kind === 'videoinput');
+    // If labels are empty, prompt quick permission to reveal labels
+    const needPrompt = cameras.length && !cameras[0].label;
+    if (needPrompt) {
+      try {
+        const tmp = await navigator.mediaDevices.getUserMedia({video:true, audio:false});
+        tmp.getTracks().forEach(t=>t.stop());
+        devices = await navigator.mediaDevices.enumerateDevices();
+        cameras = devices.filter(d => d.kind === 'videoinput');
+      } catch(e) {
+        // no permission -> still fill with device ids
+      }
+    }
+    cameras.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.deviceId;
+      // try to hint 'ultra' if label contains wide/ultra
+      opt.textContent = c.label || `Camera ${deviceSelect.length+1}`;
+      deviceSelect.appendChild(opt);
+    });
+    if (cameras.length === 0) {
+      const opt = document.createElement('option');
+      opt.textContent = 'No camera found';
+      opt.value = '';
+      deviceSelect.appendChild(opt);
+    }
+  } catch(err) {
+    console.warn('list devices error', err);
+    const opt = document.createElement('option');
+    opt.textContent = 'Error listing devices';
+    opt.value = '';
+    deviceSelect.appendChild(opt);
+  }
 }
 
-// === Controls ===
-document.getElementById('swapCam').onclick=()=>{facing=facing==='environment'?'user':'environment';startCamera();};
-document.getElementById('lensBtn').onclick=()=>{
-  lensZoom=lensZoom===1?0.5:1;
-  document.getElementById('lensBtn').textContent=lensZoom===1?'1x':'0.5x';
-  startCamera();
-};
-document.querySelectorAll('.mode-btn').forEach(btn=>{
-  btn.onclick=()=>{document.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');mode=btn.dataset.mode;msg.textContent='Mode: '+mode;};
-});
-document.getElementById('toggle').onclick=()=>{
-  if(running){running=false;cancelAnimationFrame(rafId);stream.getTracks().forEach(t=>t.stop());msg.textContent='⏸️ Kamera berhenti';}
-  else startCamera();
+/* ---------- Start camera with deviceId or facingMode ---------- */
+async function startCamera(opts={}) {
+  try {
+    if (stream) stream.getTracks().forEach(t=>t.stop());
+    const preferLow = (navigator.deviceMemory && navigator.deviceMemory <= 2);
+    const videoConstraints = {};
+
+    if (opts.deviceId) {
+      videoConstraints.deviceId = { exact: opts.deviceId };
+    } else {
+      videoConstraints.facingMode = { ideal: usingFacing };
+      // choose resolution based on device capacity
+      videoConstraints.width = { ideal: preferLow ? 640 : 1280 };
+      videoConstraints.height = { ideal: preferLow ? 480 : 720 };
+      videoConstraints.frameRate = { ideal: 30 };
+    }
+
+    const c = { video: videoConstraints, audio: false };
+    setStatus('Requesting camera...');
+    stream = await navigator.mediaDevices.getUserMedia(c);
+    inputVideo.srcObject = stream;
+    await inputVideo.play();
+
+    // if deviceSelect empty, populate
+    if (!deviceSelect.options.length) await listVideoDevices();
+
+    // update selected device if provided
+    if (opts.deviceId) deviceId = opts.deviceId;
+    else {
+      // try set deviceId if possible
+      const tracks = stream.getVideoTracks();
+      if (tracks && tracks[0]) {
+        // get label then find matching device
+        const label = tracks[0].label;
+        for(let i=0;i<deviceSelect.options.length;i++){
+          if (deviceSelect.options[i].textContent === label) {
+            deviceSelect.selectedIndex = i; break;
+          }
+        }
+      }
+    }
+
+    // prepare OpenCV capture
+    cap = new cv.VideoCapture(inputVideo);
+    // reset prior data
+    prevGray && prevGray.delete && prevGray.delete();
+    prevGray = null;
+    hist = [];
+    running = true;
+    setStatus('Camera active');
+    // resize canvas to video size
+    outputCanvas.width = inputVideo.videoWidth || 640;
+    outputCanvas.height = inputVideo.videoHeight || 480;
+    // start processing
+    rafId = requestAnimationFrame(processLoop);
+  } catch(e) {
+    console.error(e);
+    setStatus('Camera error: ' + (e.message || e.name));
+  }
+}
+
+/* ---------- Stop camera ---------- */
+function stopCamera(){
+  running = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  if (stream) stream.getTracks().forEach(t=>t.stop());
+  stream = null; cap = null;
+  prevGray && prevGray.delete && prevGray.delete();
+  prevGray = null;
+  setStatus('Camera stopped');
+}
+
+/* ---------- Upgraded processLoop (downscale for flow, buffer, smoothing, auto-crop) ---------- */
+async function processLoop(){
+  if (!running) return;
+  const t0 = performance.now();
+
+  // Read frame with OpenCV
+  let src = new cv.Mat(inputVideo.videoHeight, inputVideo.videoWidth, cv.CV_8UC4);
+  try {
+    cap.read(src);
+  } catch(e) {
+    src.delete();
+    rafId = requestAnimationFrame(processLoop);
+    return;
+  }
+
+  // Convert to gray (for flow)
+  let grayFull = new cv.Mat();
+  cv.cvtColor(src, grayFull, cv.COLOR_RGBA2GRAY);
+
+  // Downscale for faster flow (keep step small)
+  const scale = 0.5; // 0.5 = process quarter area (faster). On high-end device you can set 1.0
+  const smallW = Math.max(16, Math.floor(grayFull.cols * scale));
+  const smallH = Math.max(16, Math.floor(grayFull.rows * scale));
+  let gray = new cv.Mat();
+  cv.resize(grayFull, gray, new cv.Size(smallW, smallH), 0, 0, cv.INTER_LINEAR);
+
+  if (!prevGray) {
+    prevGray = new cv.Mat();
+    gray.copyTo(prevGray);
+    // Just show original first frame
+    // draw src to canvas
+    cv.imshow(outputCanvas, src);
+    gray.delete(); grayFull.delete(); src.delete();
+    rafId = requestAnimationFrame(processLoop);
+    return;
+  }
+
+  // optical flow (Farneback) - on small image
+  let flow = new cv.Mat();
+  try {
+    cv.calcOpticalFlowFarneback(prevGray, gray, flow, 0.5, 3, 15, 3, 5, 1.2, 0);
+  } catch(err) {
+    // if fails, show original
+    cv.imshow(outputCanvas, src);
+    flow.delete && flow.delete();
+    prevGray.delete(); prevGray = gray.clone();
+    gray.delete(); grayFull.delete(); src.delete();
+    rafId = requestAnimationFrame(processLoop);
+    return;
+  }
+
+  // sample flow grid to compute average motion
+  const f32 = flow.data32F;
+  const w = flow.cols, h = flow.rows;
+  let sx = 0, sy = 0, sc = 0;
+  const stride = 6; // sample every N pixels (tune for perf)
+  for (let y = 0; y < h; y += stride) {
+    for (let x = 0; x < w; x += stride) {
+      const idx = (y * w + x) * 2;
+      const vx = f32[idx] || 0;
+      const vy = f32[idx + 1] || 0;
+      sx += vx; sy += vy; sc++;
+    }
+  }
+  const avgX = sc ? sx / sc : 0;
+  const avgY = sc ? sy / sc : 0;
+
+  // push to history (motion buffer)
+  const smoothingWindow = (mode === 'steady') ? Math.max(8, parseInt(stabilityEl.value/2)) : Math.max(3, parseInt(stabilityEl.value/10));
+  hist.push({x: avgX, y: avgY, t: Date.now()});
+  while (hist.length > smoothingWindow) hist.shift();
+
+  // compute moving avg
+  let mx=0, my=0;
+  for (let i=0;i<hist.length;i++){ mx += hist[i].x; my += hist[i].y; }
+  mx = hist.length ? mx / hist.length : 0;
+  my = hist.length ? my / hist.length : 0;
+
+  // adaptive smoothing (AI-like): smoother alpha depends on magnitude and mode
+  const motionMag = Math.hypot(mx, my);
+  const baseAlpha = mode === 'steady' ? 0.04 : 0.12;
+  const adaptAlpha = baseAlpha * (1 + Math.min(4, motionMag * 4));
+  const s = smoother.update(mx, my, adaptAlpha);
+
+  // compute compensation transform (inverse)
+  // multiply by strength factor (mode)
+  const strength = (mode === 'steady') ? 2.2 : 1.0;
+  const dx = -s.x * strength * (1/scale); // scale back to full resolution
+  const dy = -s.y * strength * (1/scale);
+
+  // optional rotation handling could be added by analyzing gradients / corner orientation.
+  const M = cv.matFromArray(2,3,cv.CV_64F,[1,0,dx, 0,1,dy]);
+
+  // warp full-resolution frame
+  let warped = new cv.Mat();
+  cv.warpAffine(src, warped, M, src.size(), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(0,0,0,255));
+
+  // auto-crop to hide black borders:
+  // cropPercent depends on motion magnitude and crop slider
+  const userCrop = parseFloat(cropEl.value) / 100; // 0..0.2
+  // dynamic extra crop based on motion magnitude
+  const dynamicCrop = clamp(Math.min(0.12, motionMag * 0.25), 0, 0.12);
+  const totalCrop = clamp(userCrop + (mode==='steady'?dynamicCrop:dynamicCrop*0.6), 0, 0.22);
+
+  const iw = warped.cols, ih = warped.rows;
+  const cx = Math.round(iw * totalCrop);
+  const cy = Math.round(ih * totalCrop);
+  const cw = Math.round(iw * (1 - totalCrop*2));
+  const ch = Math.round(ih * (1 - totalCrop*2));
+  let displayMat = warped;
+  if (cw > 10 && ch > 10) {
+    displayMat = warped.roi(new cv.Rect(cx, cy, cw, ch));
+  }
+
+  // final draw: convert displayMat to canvas
+  let rgba = new cv.Mat();
+  // ensure RGBA
+  cv.cvtColor(displayMat, rgba, cv.COLOR_RGBA2RGBA);
+  const img = new ImageData(new Uint8ClampedArray(rgba.data), rgba.cols, rgba.rows);
+  // draw faster via temporary canvas
+  const tmp = document.createElement('canvas');
+  tmp.width = rgba.cols; tmp.height = rgba.rows;
+  tmp.getContext('2d').putImageData(img, 0, 0);
+  const ctx = outputCanvas.getContext('2d');
+  outputCanvas.width = inputVideo.videoWidth;
+  outputCanvas.height = inputVideo.videoHeight;
+  ctx.clearRect(0,0,outputCanvas.width,outputCanvas.height);
+  ctx.drawImage(tmp, 0, 0, outputCanvas.width, outputCanvas.height);
+
+  // cleanup mats
+  rgba.delete();
+  if (displayMat !== warped) displayMat.delete();
+  warped.delete();
+  M.delete();
+  flow.delete();
+  prevGray.delete();
+  prevGray = gray.clone();
+  gray.delete(); grayFull.delete(); src.delete();
+
+  const t1 = performance.now();
+  setPerf(`~${Math.round(1000/(t1-t0)||0)} fps | buf:${hist.length} | crop:${Math.round(totalCrop*100)}%`);
+
+  // request next
+  rafId = requestAnimationFrame(processLoop);
+}
+
+/* ---------- UI handlers ---------- */
+deviceSelect.onchange = async ()=> {
+  const id = deviceSelect.value;
+  if (!id) return;
+  deviceId = id;
+  await startCamera({deviceId: id});
 };
 
-navigator.permissions && navigator.permissions.query({name:'camera'}).then(p=>{
-  if(p.state!=='granted')msg.textContent='🔒 Izinkan kamera...';
-});
+refreshBtn.onclick = async ()=> { await listVideoDevices(); setStatus('Devices refreshed'); };
+
+swapBtn.onclick = async ()=> {
+  // if device selection present, try next index
+  if (deviceSelect.options.length > 1) {
+    const idx = deviceSelect.selectedIndex;
+    const next = (idx + 1) % deviceSelect.options.length;
+    deviceSelect.selectedIndex = next;
+    deviceId = deviceSelect.value;
+    await startCamera({deviceId});
+    return;
+  }
+  usingFacing = usingFacing === 'environment' ? 'user' : 'environment';
+  await startCamera({});
+};
+
+modeNormal.onclick = ()=> { mode='normal'; modeNormal.classList.add('active'); modeSteady.classList.remove('active'); setStatus('Mode: NORMAL'); };
+modeSteady.onclick = ()=> { mode='steady'; modeSteady.classList.add('active'); modeNormal.classList.remove('active'); setStatus('Mode: STEADY'); };
+
+toggleBtn.onclick = ()=> {
+  if (running) { stopCamera(); toggleBtn.style.background = '#fff'; }
+  else { startCamera({deviceId}); toggleBtn.style.background = '#8bff9a'; }
+};
+
+recordBtn.onclick = ()=> {
+  if (!running) { setStatus('Start camera first'); return; }
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+    // start recording from outputCanvas
+    recBlobs = [];
+    const fps = 25;
+    const s = outputCanvas.captureStream(fps);
+    try {
+      mediaRecorder = new MediaRecorder(s, { mimeType: 'video/webm;codecs=vp8' });
+    } catch(e) {
+      setStatus('Recording not supported: ' + e.message);
+      return;
+    }
+    mediaRecorder.ondataavailable = ev => { if (ev.data && ev.data.size) recBlobs.push(ev.data); };
+    mediaRecorder.onstop = ()=> {
+      const blob = new Blob(recBlobs, { type: 'video/webm' });
+      if (lastRecordingURL) URL.revokeObjectURL(lastRecordingURL);
+      lastRecordingURL = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = lastRecordingURL; a.download = `stabilized-${Date.now()}.webm`;
+      a.click();
+      setStatus('Recording saved (download started)');
+    };
+    mediaRecorder.start();
+    recordBtn.textContent = 'Stop';
+    setStatus('Recording...');
+  } else {
+    mediaRecorder.stop();
+    recordBtn.textContent = 'Record';
+  }
+};
+
+/* ---------- Init ---------- */
+await listVideoDevices();
+modeNormal.classList.add('active');
+setStatus('Ready. Choose camera and press Start (big circle).');
+
+// Try to auto-start (will prompt permission)
+setTimeout(()=> {
+  // do not auto-start if user already denied; only attempt if permission not decided
+  navigator.permissions && navigator.permissions.query({name:'camera'}).then(p=>{
+    if (p.state === 'granted') {
+      startCamera({deviceId});
+      toggleBtn.style.background = '#8bff9a';
+    }
+  });
+}, 300);
+
+})(); // end async IIFE
 </script>
 </body>
 </html>
